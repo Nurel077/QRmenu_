@@ -1,0 +1,2 @@
+﻿from django.urls import path  # Импорт функции path для создания URL-маршрутов
+from . import views           # Импорт views из текущего приложения

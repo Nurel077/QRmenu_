@@ -1,0 +1,54 @@
+# Core Django
+Django==5.0.1
+django-environ==0.12.0
+
+# Database
+psycopg2-binary==2.9.11
+
+# Django REST Framework
+djangorestframework==3.15.1
+django-filter==24.3
+drf-spectacular==0.27.2
+
+# Real-time features
+channels==4.2.0
+channels-redis==4.2.0
+daphne==4.2.1
+
+# Authentication & Authorization
+djangorestframework-simplejwt==5.5.1
+django-cors-headers==4.9.0
+
+# Image processing & QR codes
+Pillow==10.3.0
+qrcode[pil]==8.2
+
+# Forms & Validation
+django-crispy-forms==2.4
+crispy-bootstrap5==2024.10
+
+# Admin enhancements
+django-import-export==4.4.0
+
+# Utilities
+python-dateutil==2.9.0.post0
+pytz==2025.2
+
+# Development
+django-debug-toolbar==4.3.0
+django-extensions==4.0.0
+
+# Testing
+pytest==8.1.0
+pytest-django==4.9.0
+pytest-cov==7.0.0
+factory-boy==3.3.2
+
+# Code quality
+black==24.10.0
+flake8==7.0.0
+isort==6.1.0
+
+# Production server
+gunicorn==21.2.0
+whitenoise==6.11.0  # исправлено: последняя существующая версия

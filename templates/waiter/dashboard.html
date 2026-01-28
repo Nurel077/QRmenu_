@@ -1,0 +1,341 @@
+{% extends 'waiter/base.html' %}
+
+{% block title %}Order Dashboard - Waiter Panel{% endblock %}
+
+{% block content %}
+<div class="stats-bar">
+    <div class="stat-card">
+        <div class="stat-number" id="statPending">0</div>
+        <div class="stat-label">Pending Orders</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number" id="statConfirmed">0</div>
+        <div class="stat-label">Confirmed</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number" id="statReady">0</div>
+        <div class="stat-label">Ready for Pickup</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number" id="statDelivered">0</div>
+        <div class="stat-label">Delivered Today</div>
+    </div>
+</div>
+
+<div class="filter-tabs">
+    <button class="filter-btn active" onclick="filterOrders('all')">
+        <i class="fas fa-list"></i> All Orders
+    </button>
+    <button class="filter-btn" onclick="filterOrders('pending')">
+        <i class="fas fa-hourglass-start"></i> Pending
+    </button>
+    <button class="filter-btn" onclick="filterOrders('confirmed')">
+        <i class="fas fa-check-circle"></i> Confirmed
+    </button>
+    <button class="filter-btn" onclick="filterOrders('ready')">
+        <i class="fas fa-utensils"></i> Ready
+    </button>
+    <button class="filter-btn" onclick="filterOrders('delivered')">
+        <i class="fas fa-check-double"></i> Delivered
+    </button>
+</div>
+
+<div class="orders-grid" id="ordersContainer">
+    <div class="empty-state">
+        <i class="fas fa-inbox"></i>
+        <p>No orders assigned yet</p>
+        <small>New orders will appear here</small>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let currentFilter = 'all';
+    let orders = [];
+    let ws = null;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadOrders();
+        connectWebSocket();
+        setInterval(updateStats, 5000);
+    });
+
+    function connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const waiterId = '{{ user.id }}';
+        const restaurantId = '{{ user.restaurant.id }}';
+        ws = new WebSocket(`${protocol}//${window.location.host}/ws/waiters/${waiterId}/`);
+
+        ws.onopen = function() {
+            console.log('WebSocket connected');
+            updateConnectionStatus(true);
+            // Request initial tasks
+            ws.send(JSON.stringify({
+                'action': 'get_tasks'
+            }));
+        };
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            console.log('Received:', data);
+
+            if (data.type === 'waiter_task' || data.type === 'order_notification') {
+                loadOrders();
+            } else if (data.type === 'order_update') {
+                updateOrderDisplay(data.order);
+            } else if (data.type === 'task_notification') {
+                loadOrders();
+            }
+        };
+
+        ws.onerror = function(error) {
+            console.error('WebSocket error:', error);
+            updateConnectionStatus(false);
+        };
+
+        ws.onclose = function() {
+            console.log('WebSocket disconnected');
+            updateConnectionStatus(false);
+            // Try to reconnect after 3 seconds
+            setTimeout(connectWebSocket, 3000);
+        };
+    }
+
+    function loadOrders() {
+        fetch('/waiter/api/orders/?status=pending,confirmed,ready', {
+            credentials: 'same-origin',
+            headers: {
+                'Accept': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            orders = data.results || data;
+            displayOrders();
+            updateStats();
+        })
+        .catch(error => console.error('Error loading orders:', error));
+    }
+
+    function displayOrders() {
+        const container = document.getElementById('ordersContainer');
+        let filteredOrders = orders;
+
+        if (currentFilter !== 'all') {
+            filteredOrders = orders.filter(order => order.status === currentFilter);
+        }
+
+        if (filteredOrders.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-inbox"></i>
+                    <p>No ${currentFilter} orders</p>
+                    <small>Check back soon for new orders</small>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = filteredOrders.map(order => `
+            <div class="order-card" id="order-${order.id}">
+                <div class="order-header">
+                    <div>
+                        <div class="order-id">#${order.id.substring(0, 8)}</div>
+                        <div class="order-time">${formatTime(order.created_at)}</div>
+                    </div>
+                    <div>
+                        <span class="order-table">Table ${order.table_session.table.number}</span>
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <span class="order-status status-${order.status}">
+                        ${formatStatus(order.status)}
+                    </span>
+                    ${order.guest_name ? `<div style="color: #666; font-size: 12px; margin-top: 5px;"><i class="fas fa-user-circle"></i> ${order.guest_name}</div>` : ''}
+                </div>
+
+                <div class="order-items">
+                    <div class="item-list">
+                        ${order.items ? order.items.map(item => `
+                            <div class="order-item">
+                                <span class="item-name">${item.menu_item.name}</span>
+                                <span class="item-qty">×${item.quantity}</span>
+                                <span class="item-price">$${parseFloat(item.price).toFixed(2)}</span>
+                            </div>
+                        `).join('') : '<p style="color: #999; font-size: 12px;">No items</p>'}
+                    </div>
+                </div>
+
+                <div class="order-total">
+                    <span>Total:</span>
+                    <span>$${parseFloat(order.total_amount).toFixed(2)}</span>
+                </div>
+
+                <div class="order-actions">
+                    ${order.status === 'pending' ? `
+                        <button class="action-btn action-confirm" onclick="confirmOrder('${order.id}')">
+                            <i class="fas fa-check-circle"></i> Confirm
+                        </button>
+                    ` : ''}
+                    ${order.status === 'confirmed' ? `
+                        <button class="action-btn action-ready" onclick="markReady('${order.id}')">
+                            <i class="fas fa-utensils"></i> Ready
+                        </button>
+                    ` : ''}
+                    ${order.status === 'ready' ? `
+                        <button class="action-btn action-deliver" onclick="markDelivered('${order.id}')">
+                            <i class="fas fa-check-double"></i> Delivered
+                        </button>
+                    ` : ''}
+                    <button class="action-btn action-details" onclick="showOrderDetails('${order.id}')">
+                        <i class="fas fa-info-circle"></i> Details
+                    </button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function filterOrders(filter) {
+        currentFilter = filter;
+        document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+        event.target.closest('.filter-btn').classList.add('active');
+        displayOrders();
+    }
+
+    function confirmOrder(orderId) {
+        updateOrderStatus(orderId, 'confirmed');
+    }
+
+    function markReady(orderId) {
+        updateOrderStatus(orderId, 'ready');
+    }
+
+    function markDelivered(orderId) {
+        updateOrderStatus(orderId, 'delivered');
+    }
+
+    function updateOrderStatus(orderId, newStatus) {
+        fetch(`/waiter/api/orders/${orderId}/`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                'status': newStatus
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            // Update local data
+            const orderIndex = orders.findIndex(o => o.id === orderId);
+            if (orderIndex !== -1) {
+                orders[orderIndex] = data;
+                displayOrders();
+                updateStats();
+            }
+            showNotification(`Order updated to ${formatStatus(newStatus)}`, 'success');
+        })
+        .catch(error => {
+            console.error('Error updating order:', error);
+            showNotification('Failed to update order', 'error');
+        });
+    }
+
+    function showOrderDetails(orderId) {
+        const order = orders.find(o => o.id === orderId);
+        if (!order) return;
+
+        const details = `
+            <h3>Order #${order.id.substring(0, 8)}</h3>
+            <p><strong>Table:</strong> ${order.table_session.table.number}</p>
+            <p><strong>Guest:</strong> ${order.guest_name || 'Guest'}</p>
+            <p><strong>Status:</strong> ${formatStatus(order.status)}</p>
+            <p><strong>Items:</strong></p>
+            <ul>
+                ${order.items ? order.items.map(item => `<li>${item.quantity}× ${item.menu_item.name}</li>`).join('') : ''}
+            </ul>
+            <p><strong>Total:</strong> $${parseFloat(order.total_amount).toFixed(2)}</p>
+        `;
+        alert(details);
+    }
+
+    function updateStats() {
+        const stats = {
+            pending: orders.filter(o => o.status === 'pending').length,
+            confirmed: orders.filter(o => o.status === 'confirmed').length,
+            ready: orders.filter(o => o.status === 'ready').length,
+            delivered: orders.filter(o => o.status === 'delivered').length
+        };
+
+        document.getElementById('statPending').textContent = stats.pending;
+        document.getElementById('statConfirmed').textContent = stats.confirmed;
+        document.getElementById('statReady').textContent = stats.ready;
+        document.getElementById('statDelivered').textContent = stats.delivered;
+    }
+
+    function updateConnectionStatus(connected) {
+        const status = document.getElementById('connectionStatus');
+        if (connected) {
+            status.classList.remove('disconnected');
+            status.innerHTML = '<span class="connection-dot"></span><span>WebSocket Connected</span>';
+        } else {
+            status.classList.add('disconnected');
+            status.innerHTML = '<span class="connection-dot"></span><span>Reconnecting...</span>';
+        }
+    }
+
+    function formatTime(timestamp) {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function formatStatus(status) {
+        return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    function showNotification(message, type) {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            background: ${type === 'success' ? '#28a745' : '#dc3545'};
+            color: white;
+            border-radius: 5px;
+            z-index: 999;
+            animation: slideIn 0.3s ease;
+        `;
+        notification.textContent = message;
+        document.body.appendChild(notification);
+        setTimeout(() => notification.remove(), 3000);
+    }
+
+    function getToken() {
+        return localStorage.getItem('auth_token') || '';
+    }
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+
+    // Auto-refresh orders every 30 seconds
+    setInterval(loadOrders, 30000);
+</script>
+{% endblock %}
